@@ -1,8 +1,9 @@
 /**********************************************************************
  *                                                                    *
  * Created by Adam Brockett                                           *
+ * Modified by Joel Pelaez Jorge                                      *
  *                                                                    *
- * Copyright (c) 2010                                                 *
+ * Copyright (c) 2010 Adam Brockett                                   *
  *                                                                    *
  * Redistribution and use in source and binary forms, with or without *
  * modification is allowed.                                           *
@@ -15,10 +16,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <gmp.h>
 
 #define MODULUS_SIZE 1024                   /* This is the number of bits we want in the modulus */
-#define BLOCK_SIZE (MODULUS_SIZE/8)         /* This is the size of a block that gets en/decrypted at once */
+#define PBLOCK_SIZE ((MODULUS_SIZE/8)-1)    /* This is the max size of a block that gets encrypted */
+#define EBLOCK_SIZE (MODULUS_SIZE/8)        /* This is the size of a block that gets decrypted */
+#define BLOCK_SIZE  EBLOCK_SIZE             /* This is the defautl size used in text en/decrypt functions */
 #define BUFFER_SIZE ((MODULUS_SIZE/8) / 2)  /* This is the number of bytes in n and p */
 
 typedef struct {
@@ -56,7 +60,7 @@ void generate_keys(private_key* ku, public_key* kp)
      * first then pick p,q st. gcd(e, p-1) = gcd(e, q-1) = 1 */
     // We'll set e globally.  I've seen suggestions to use primes like 3, 17 or 
     // 65537, as they make coming calculations faster.  Lets use 3.
-    mpz_set_ui(ku->e, 3); 
+    mpz_set_ui(ku->e, 65537); 
 
     /* Select p and q */
     /* Start with p */
@@ -224,14 +228,21 @@ int decrypt(char* message, char* cipher, int length, private_key ku)
     return msg_idx;
 }
 
-int main()
+int main(int argc, char** argv)
 {
-    int i;
+    int i, j, k;
+    char* message = "Hello RSA";
+    char dmessage[BLOCK_SIZE];  memset(dmessage, 0, sizeof(dmessage));
+    char emessage[BLOCK_SIZE];  memset(emessage, 0, sizeof(emessage));
     mpz_t M;  mpz_init(M);
     mpz_t C;  mpz_init(C);
     mpz_t DC;  mpz_init(DC);
     private_key ku;
     public_key kp;
+
+    // Use custom message
+    if ((argc >= 2) && (strlen(argv[1]) <= (BLOCK_SIZE - 11)))
+       message = argv[1];
 
     // Initialize public key
     mpz_init(kp.n);
@@ -244,25 +255,69 @@ int main()
     mpz_init(ku.q); 
 
     generate_keys(&ku, &kp);
-    printf("---------------Private Key-----------------");
-    printf("kp.n is [%s]\n", mpz_get_str(NULL, 16, kp.n));
-    printf("kp.e is [%s]\n", mpz_get_str(NULL, 16, kp.e));
-    printf("---------------Public Key------------------");
-    printf("ku.n is [%s]\n", mpz_get_str(NULL, 16, ku.n));
-    printf("ku.e is [%s]\n", mpz_get_str(NULL, 16, ku.e));
-    printf("ku.d is [%s]\n", mpz_get_str(NULL, 16, ku.d));
-    printf("ku.p is [%s]\n", mpz_get_str(NULL, 16, ku.p));
-    printf("ku.q is [%s]\n", mpz_get_str(NULL, 16, ku.q));
+    printf("---------------Private Key-----------------\n");
+    printf("kp.n is\t\t[%s]\n", mpz_get_str(NULL, 16, kp.n));
+    printf("kp.e is\t\t[%s]\n", mpz_get_str(NULL, 16, kp.e));
+    printf("---------------Public Key------------------\n");
+    printf("ku.n is\t\t[%s]\n", mpz_get_str(NULL, 16, ku.n));
+    printf("ku.e is\t\t[%s]\n", mpz_get_str(NULL, 16, ku.e));
+    printf("ku.d is\t\t[%s]\n", mpz_get_str(NULL, 16, ku.d));
+    printf("ku.p is\t\t[%s]\n", mpz_get_str(NULL, 16, ku.p));
+    printf("ku.q is\t\t[%s]\n", mpz_get_str(NULL, 16, ku.q));
 
-    char buf[6*BLOCK_SIZE]; 
-    for(i = 0; i < 6*BLOCK_SIZE; i++)
+    // Encrypt a block data with size in bytes (BLOCK_SIZE - 1) and decrypt it
+    char buf[PBLOCK_SIZE]; 
+    for(i = 0; i < PBLOCK_SIZE; i++)
         buf[i] = rand() % 0xFF;
 
-    mpz_import(M, (6*BLOCK_SIZE), 1, sizeof(buf[0]), 0, 0, buf);
-    printf("original is [%s]\n", mpz_get_str(NULL, 16, M)); 
+    mpz_import(M, (PBLOCK_SIZE), 1, sizeof(buf[0]), 0, 0, buf);
+    printf("original is\t[%s]\n", mpz_get_str(NULL, 16, M)); 
     block_encrypt(C, M, kp);
-    printf("encrypted is [%s]\n", mpz_get_str(NULL, 16, C));
+    printf("encrypted is\t[%s]\n", mpz_get_str(NULL, 16, C));
     block_decrypt(DC, C, ku);
-    printf("decrypted is [%s]\n", mpz_get_str(NULL, 16, DC));
+    printf("decrypted is\t[%s]\n", mpz_get_str(NULL, 16, DC));
+
+    // Check 128 other integers that such (MODULUS_SIZE - 1), encrypt and decrypt.
+    printf("Checking 128 other encrypts\n");
+    for (j = 0; j < 128; j++)
+    {
+        k = 0; // Check if any encrypt fail.
+
+        for(i = 0; i < BLOCK_SIZE; i++)
+            buf[i] = rand() % 0xFF;
+        buf[0] &= 0x7F; // Set last bit to zero to such (bits N - 1)
+
+        mpz_import(M, (BLOCK_SIZE), 1, sizeof(buf[0]), 0, 0, buf);
+        block_encrypt(C, M, kp);
+        block_decrypt(DC, C, ku);
+        if (mpz_cmp (M, DC)) {
+            printf ("Error in test: %d\n", j);
+            k = 1;
+        }
+    }
+
+    if (k)
+        printf("Encrypt 128 blocks test: fail\n");
+    else
+        printf("Encrypt 128 blocks test: OK\n");
+
+    // Encrypt a text string, check block size and decrypt it.
+    printf("original message:\t\t%s\n", message);
+
+    k = encrypt(emessage, message, strlen(message), kp);
+
+    printf("encrypted message length:\t%d\n", k);
+
+    decrypt(dmessage, emessage, BLOCK_SIZE, ku);
+
+    printf("decrypted message:\t\t%s\n", dmessage);
+
+    if (!strcmp(message,dmessage))
+        printf("Message en/decyprted successful\n");
+    else
+        printf("Message en/decyprted failed\n");
+
+    printf("Modulus size: %d bits - %d bytes\n", mpz_sizeinbase(kp.n, 2), mpz_sizeinbase(kp.n, 256));
+
     return 0;
 }
