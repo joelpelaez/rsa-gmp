@@ -31,11 +31,14 @@ typedef struct {
 } public_key;
 
 typedef struct {
-    mpz_t n; /* Modulus */
-    mpz_t e; /* Public Exponent */
-    mpz_t d; /* Private Exponent */
-    mpz_t p; /* Starting prime p */
-    mpz_t q; /* Starting prime q */
+    mpz_t n;  /* Modulus */
+    mpz_t e;  /* Public Exponent */
+    mpz_t d;  /* Private Exponent */
+    mpz_t p;  /* Starting prime p */
+    mpz_t q;  /* Starting prime q */
+    mpz_t dp; /* Private exponent mod p */
+    mpz_t dq; /* Private exponent mod q */
+    mpz_t qi; /* Inverse of q */
 } private_key;
 
 void print_hex(char* arr, int len)
@@ -119,6 +122,13 @@ void generate_keys(private_key* ku, public_key* kp)
         printf("Invert failed\n");
     }
 
+    /* Calculate values for Chinese remainder algorithm */
+    mpz_sub_ui(tmp1, ku->p, 1);
+    mpz_sub_ui(tmp2, ku->q, 1);
+    mpz_mod(ku->dp, ku->d, tmp1);
+    mpz_mod(ku->dq, ku->d, tmp2);
+    mpz_invert(ku->qi, ku->q, ku->p);
+
     /* Set public key */
     mpz_set(kp->e, ku->e);
     mpz_set(kp->n, ku->n);
@@ -129,7 +139,7 @@ void generate_keys(private_key* ku, public_key* kp)
 void block_encrypt(mpz_t C, mpz_t M, public_key kp)
 {
     /* C = M^e mod n */
-    mpz_powm(C, M, kp.e, kp.n); 
+    mpz_powm(C, M, kp.e, kp.n);
     return;
 }
 
@@ -186,7 +196,31 @@ int encrypt(char cipher[], char message[], int length, public_key kp)
 
 void block_decrypt(mpz_t M, mpz_t C, private_key ku)
 {
-    mpz_powm(M, C, ku.d, ku.n); 
+    /* mpz_powm(M, C, ku.d, ku.n); */
+    /* use Chinese remainder algorithm */
+    mpz_t m1;
+    mpz_t m2;
+    mpz_t h;
+    mpz_t tmp1;
+    mpz_t tmp2;
+    mpz_init(m1);
+    mpz_init(m2);
+    mpz_init(h);
+    mpz_init(tmp1);
+    mpz_init(tmp2);
+    /* m1 = M^dp mod p */
+    mpz_powm(m1, C, ku.dp, ku.p);
+    /* m2 = M^dq mod q */
+    mpz_powm(m2, C, ku.dq, ku.q);
+
+    /* h = qi (m1 - m2) mod p */
+    mpz_sub (tmp1, m1, m2);
+    mpz_mul (tmp2, ku.qi, tmp1);
+    mpz_mod (h, tmp2, ku.p);
+
+    /* m = m2 + hq */
+    mpz_mul (tmp1, h, ku.q);
+    mpz_add (M, m2, tmp1);
     return;
 }
 
@@ -253,6 +287,9 @@ int main(int argc, char** argv)
     mpz_init(ku.d); 
     mpz_init(ku.p); 
     mpz_init(ku.q); 
+    mpz_init(ku.dp);
+    mpz_init(ku.dq);
+    mpz_init(ku.qi);
 
     generate_keys(&ku, &kp);
     printf("---------------Private Key-----------------\n");
